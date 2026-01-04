@@ -116,6 +116,13 @@ with st.sidebar:
         st.session_state.inventory = load_data()
         st.success("Daten neu aus Cloud geladen!")
         st.rerun()
+    st.markdown("### ⏱ FT→Min Rechner")
+    ft_input = st.number_input("Feet (ft)", min_value=0, value=100, step=1)
+    total_seconds_calc = int((ft_input / 45) * 60)
+    minutes_calc = total_seconds_calc // 60
+    seconds_calc = total_seconds_calc % 60
+    st.info(f"{ft_input} ft → {minutes_calc} min {seconds_calc} s")
+    st.caption("Tipp: Auf der Dispo ist die Vorstipzeit in Minuten — diesen Rechner verwenden.")
 
 tab_dash, tab_work, tab_lab, tab_list = st.tabs(["📊 Dashboard", "🎬 Unload", "🚚 Labor", "📦 Listen"])
 
