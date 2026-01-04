@@ -1,3 +1,6 @@
+
+# Dependencies for Google Sheets backend
 streamlit
 pandas
-pillow
+gspread
+oauth2client
