@@ -12,6 +12,7 @@ st.set_page_config(page_title="Film Tracker (Mobile)", page_icon="🎬", layout=
 def get_db_connection():
     if 'gcn' not in st.session_state:
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        # FIX: Secrets als JSON-String laden
         creds_dict = json.loads(st.secrets["gcp_service_account"]["info"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
@@ -23,17 +24,20 @@ def get_db_connection():
             st.stop()
     return st.session_state.gcn
 
-
 def load_data():
     sheet = get_db_connection()
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
     if df.empty:
         return pd.DataFrame(columns=["Roll_ID", "Emulsion", "Length_ft", "Status", "Location", "Magazine", "Notes", "Exposed_Date"])
+    
+    # Sicherstellen, dass Roll_ID immer ein String ist (vermeidet Fehler bei reinen Zahlen)
+    if 'Roll_ID' in df.columns:
+        df['Roll_ID'] = df['Roll_ID'].astype(str)
+        
     if 'Length_ft' in df.columns:
         df['Length_ft'] = pd.to_numeric(df['Length_ft'], errors='coerce').fillna(0)
     return df
-
 
 def save_data(df):
     sheet = get_db_connection()
@@ -45,7 +49,6 @@ def save_data(df):
         st.cache_data.clear()
     except Exception:
         pass
-
 
 def seed_initial_data():
     data = []
@@ -64,6 +67,7 @@ def seed_initial_data():
     add_batch("SET_500T_1000", 4, "5219 (500T)", 1000, "Set (Praxis)", "Startbestand")
     add_batch("SET_250D_400", 1, "5207 (250D)", 400, "Set (Praxis)", "Startbestand")
     add_batch("SET_250D_1000", 1, "5207 (250D)", 1000, "Set (Praxis)", "Startbestand")
+    
     short_ends = [
         {"Roll_ID": "A00T01a", "Emulsion": "5207 (250D)", "Length_ft": 375, "Status": "Short End", "Location": "Set (Praxis)", "Magazine": "", "Notes": "Rest Test (A00T01)", "Exposed_Date": ""},
         {"Roll_ID": "TX004a",  "Emulsion": "5219 (500T)", "Length_ft": 300, "Status": "Short End", "Location": "Set (Praxis)", "Magazine": "", "Notes": "Rest Test (TX004) | Push +1", "Exposed_Date": ""},
@@ -76,26 +80,29 @@ def seed_initial_data():
     save_data(df)
     return df
 
-
 def ft_to_time(ft):
     if pd.isna(ft) or ft == 0: return "00:00"
+    # 2-Perf Logic: 45 ft per minute
     total_seconds = int((ft / 45) * 60)
     minutes = total_seconds // 60
     seconds = total_seconds % 60
     return f"{minutes:02d}:{seconds:02d} min"
 
-
 def get_next_se_name(inventory_df, roll_id):
     if roll_id and roll_id[-1].isalpha(): base = roll_id[:-1]
     else: base = roll_id
+    
     inventory_df['Roll_ID'] = inventory_df['Roll_ID'].astype(str)
-    used_suffixes = [r[-1].lower() for r in inventory_df['ROLL_ID'].tolist() if r.startswith(base) and r[-1].isalpha()]
+    
+    # FIX: "Roll_ID" statt "ROLL_ID"
+    used_suffixes = [r[-1].lower() for r in inventory_df['Roll_ID'].tolist() if r.startswith(base) and r[-1].isalpha()]
+    
     for i in range(26):
         char = chr(ord('a') + i)
         if char not in used_suffixes: return f"{base}{char}"
     return f"{base}x"
 
-
+# --- APP START ---
 try:
     if 'inventory' not in st.session_state:
         st.session_state.inventory = load_data()
@@ -112,58 +119,81 @@ with st.sidebar:
             st.session_state.inventory = seed_initial_data()
             st.success("Datenbank auf Startzustand gesetzt!")
             st.rerun()
+            
     if st.button("🔄 Sync erzwingen (Neu laden)"):
         st.session_state.inventory = load_data()
         st.success("Daten neu aus Cloud geladen!")
         st.rerun()
-    st.markdown("### ⏱ FT→Min Rechner")
+        
+    st.markdown("### ⏱ FT→Min Rechner (2-Perf)")
     ft_input = st.number_input("Feet (ft)", min_value=0, value=100, step=1)
     total_seconds_calc = int((ft_input / 45) * 60)
     minutes_calc = total_seconds_calc // 60
     seconds_calc = total_seconds_calc % 60
     st.info(f"{ft_input} ft → {minutes_calc} min {seconds_calc} s")
-    st.caption("Tipp: Auf der Dispo ist die Vorstipzeit in Minuten — diesen Rechner verwenden.")
+    st.caption("Basis: 2-Perf (45 ft/min @ 24fps)")
 
 tab_dash, tab_work, tab_lab, tab_list = st.tabs(["📊 Dashboard", "🎬 Unload", "🚚 Labor", "📦 Listen"])
 
 with tab_dash:
     set_inv = st.session_state.inventory[st.session_state.inventory['Location'].str.contains("Set", case=False)]
     active = set_inv[set_inv['Status'].isin(['Fresh', 'Short End'])]
+    
     ft_500T = active[active['Emulsion'].str.contains("500T")]['Length_ft'].sum()
     ft_250D = active[active['Emulsion'].str.contains("250D")]['Length_ft'].sum()
+    
     c1, c2 = st.columns(2)
     c1.metric("🌙 500T (Set)", f"{ft_to_time(ft_500T)}", f"{ft_500T} ft")
     c2.metric("☀️ 250D (Set)", f"{ft_to_time(ft_250D)}", f"{ft_250D} ft")
+    
     st.dataframe(active[['Roll_ID', 'Emulsion', 'Length_ft', 'Status', 'Notes']], use_container_width=True)
 
 with tab_work:
     st.subheader("Rolle entladen")
-    available = st.session_state.inventory[(st.session_state.inventory['Location'].str.contains("Set")) & (st.session_state.inventory['Status'].isin(['Fresh', 'Short End']))]
+    available = st.session_state.inventory[
+        (st.session_state.inventory['Location'].str.contains("Set")) & 
+        (st.session_state.inventory['Status'].isin(['Fresh', 'Short End']))
+    ]
     roll_opts = available['Roll_ID'].tolist()
+    
     if roll_opts:
         sel_roll = st.selectbox("Rolle", roll_opts)
-        curr = st.session_state.inventory[st.session_state.inventory['ROLL_ID'] == sel_roll].iloc[0]
+        
+        # FIX: "Roll_ID" statt "ROLL_ID"
+        curr = st.session_state.inventory[st.session_state.inventory['Roll_ID'] == sel_roll].iloc[0]
+        
         st.info(f"Start: {curr['Length_ft']} ft ({curr['Emulsion']})")
+        
         with st.form("unload"):
             c1, c2 = st.columns(2)
             mag = c1.selectbox("Mag", ["G1 (6887)", "G2 (7115)", "G4 (6795)", "G5 (6223)", "K1 (2413)", "K2 (2279)"])
             exp = c1.number_input("Belichtet (ft)", 0, int(curr['Length_ft']))
             waste = c2.number_input("Waste (ft)", value=15)
             note = c2.text_input("Notiz")
+            
             if st.form_submit_button("Speichern"):
                 rest = curr['Length_ft'] - exp - waste
-                idx = st.session_state.inventory[st.session_state.inventory['ROLL_ID'] == sel_roll].index[0]
+                
+                # FIX: "Roll_ID" statt "ROLL_ID"
+                idx = st.session_state.inventory[st.session_state.inventory['Roll_ID'] == sel_roll].index[0]
+                
                 st.session_state.inventory.at[idx, 'Status'] = 'Exposed'
                 st.session_state.inventory.at[idx, 'Length_ft'] = exp
                 st.session_state.inventory.at[idx, 'Magazine'] = mag
                 st.session_state.inventory.at[idx, 'Notes'] = f"Mag: {mag} | {note}"
                 st.session_state.inventory.at[idx, 'Exposed_Date'] = datetime.now().strftime("%Y-%m-%d")
+                
                 msg = f"Rolle {sel_roll} gespeichert."
                 if rest > 40:
                     se_name = get_next_se_name(st.session_state.inventory, sel_roll)
-                    new_se = {"Roll_ID": se_name, "Emulsion": curr['Emulsion'], "Length_ft": rest, "Status": "Short End", "Location": "Set (Praxis)", "Magazine": "", "Notes": f"Rest von {sel_roll}", "Exposed_Date": ""}
+                    new_se = {
+                        "Roll_ID": se_name, "Emulsion": curr['Emulsion'], "Length_ft": rest,
+                        "Status": "Short End", "Location": "Set (Praxis)", "Magazine": "", 
+                        "Notes": f"Rest von {sel_roll}", "Exposed_Date": ""
+                    }
                     st.session_state.inventory = pd.concat([st.session_state.inventory, pd.DataFrame([new_se])], ignore_index=True)
                     msg += f" SE: {se_name}"
+                
                 save_data(st.session_state.inventory)
                 st.success(msg)
                 st.rerun()
