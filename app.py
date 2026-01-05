@@ -12,8 +12,29 @@ st.set_page_config(page_title="Film Tracker (Mobile)", page_icon="🎬", layout=
 def get_db_connection():
     if 'gcn' not in st.session_state:
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        # FIX: Secrets als JSON-String laden
-        creds_dict = json.loads(st.secrets["gcp_service_account"]["info"])
+        # Secrets robust einlesen: entweder bereits als dict oder als JSON-String
+        info = st.secrets.get("gcp_service_account", {}).get("info")
+        if info is None:
+            st.error("Fehler: GCP-Credentials unter 'gcp_service_account.info' fehlen in den Secrets.")
+            st.stop()
+
+        if isinstance(info, dict):
+            creds_dict = info
+        else:
+            # Try common parsing strategies and give helpful error if all fail
+            try:
+                creds_dict = json.loads(info)
+            except Exception:
+                import ast
+                try:
+                    creds_dict = ast.literal_eval(info)
+                except Exception:
+                    st.error(
+                        "Fehler beim Einlesen der GCP-Credentials (Ungültiges JSON).\n"
+                        "Stelle sicher, dass `gcp_service_account.info` gültiges JSON ist (escaped newlines)."
+                    )
+                    st.stop()
+
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         try:
