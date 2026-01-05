@@ -35,6 +35,15 @@ def get_db_connection():
                     )
                     st.stop()
 
+        # Normalize common formatting issues (private_key often contains escaped newlines)
+        pk = creds_dict.get("private_key")
+        if isinstance(pk, str):
+            if "\\n" in pk:
+                creds_dict["private_key"] = pk.replace("\\n", "\n")
+            # Trim accidental surrounding quotes
+            if creds_dict["private_key"].startswith('"') and creds_dict["private_key"].endswith('"'):
+                creds_dict["private_key"] = creds_dict["private_key"][1:-1]
+
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         try:
