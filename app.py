@@ -24,14 +24,19 @@ def get_db_connection():
             # Try common parsing strategies and give helpful error if all fail
             try:
                 creds_dict = json.loads(info)
-            except Exception:
+            except json.JSONDecodeError as e:
                 import ast
                 try:
                     creds_dict = ast.literal_eval(info)
-                except Exception:
+                except Exception as ast_err:
                     st.error(
-                        "Fehler beim Einlesen der GCP-Credentials (Ungültiges JSON).\n"
-                        "Stelle sicher, dass `gcp_service_account.info` gültiges JSON ist (escaped newlines)."
+                        f"Fehler beim Einlesen der GCP-Credentials (Ungültiges JSON).\n\n"
+                        f"**JSON Error:** {str(e)}\n\n"
+                        f"Stelle sicher, dass `gcp_service_account.info` in `.streamlit/secrets.toml` gültiges JSON ist.\n"
+                        f"Prüfe besonders:\n"
+                        f"- Alle Anführungszeichen sind escaped\n"
+                        f"- `private_key` enthält literal `\\n` (nicht echte Newlines)\n"
+                        f"- Keine Placeholder-Werte wie `YOUR_PROJECT_ID` etc."
                     )
                     st.stop()
 
